@@ -1,0 +1,14 @@
+artifact_uri: file:///c:/Users/omkar/OneDrive/Desktop/agri-fin-capstone/data/notebooks/mlruns/767611944234408548/88fca85c527a4414b54b297b3124d88c/artifacts
+end_time: 1760096221549
+entry_point_name: ''
+experiment_id: '767611944234408548'
+lifecycle_stage: active
+run_id: 88fca85c527a4414b54b297b3124d88c
+run_name: first_test_run
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1760096221477
+status: 3
+tags: []
+user_id: omkar
