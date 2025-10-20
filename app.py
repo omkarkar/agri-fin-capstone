@@ -3,9 +3,9 @@
 
 from pathlib import Path
 import pandas as pd
-import joblib
 import streamlit as st
 import matplotlib.pyplot as plt
+import pickle  # for fallback loader
 
 # ---------------- paths & constants ----------------
 ROOT = Path(__file__).resolve().parent
@@ -27,6 +27,21 @@ NUM_FEATURES = [
     "Country_Avg_Yield",
     "Crop_Avg_Yield",
 ]
+
+# ---------------- robust model loader ----------------
+
+
+def load_pipeline(path: Path):
+    """
+    Prefer joblib; if unavailable or fails, fall back to pickle.
+    Keeps the app running on environments where joblib isn't installed.
+    """
+    try:
+        import joblib  # import inside to avoid hard dependency at import time
+        return joblib.load(path)
+    except Exception:
+        with open(path, "rb") as f:
+            return pickle.load(f)
 
 # ---------------- cached helpers ----------------
 
@@ -58,7 +73,7 @@ def load_model(best_name: str):
     if not mpath.exists():
         st.error(f"Saved model not found: {mpath}")
         st.stop()
-    return joblib.load(mpath)
+    return load_pipeline(mpath)
 
 
 # ---------------- UI ----------------
