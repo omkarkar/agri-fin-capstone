@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
-import pickle  # for fallback loader
+import pickle  # fallback loader
 
 # ---------------- paths & constants ----------------
 ROOT = Path(__file__).resolve().parent
@@ -37,7 +37,7 @@ def load_pipeline(path: Path):
     Keeps the app running on environments where joblib isn't installed.
     """
     try:
-        import joblib  # import inside to avoid hard dependency at import time
+        import joblib  # lazy import so it's optional at import time
         return joblib.load(path)
     except Exception:
         with open(path, "rb") as f:
@@ -67,6 +67,22 @@ def load_best_model_name():
     return str(row["model"])  # "LinearRegression" or "RandomForest"
 
 
+@st.cache_data
+def load_best_split_metrics(best_name: str):
+    """Return test metrics for the best model, if available."""
+    mpath = MODELS / "metrics_step6.json"
+    if not mpath.exists():
+        return None
+    mdf = pd.read_json(mpath)
+    # pick TEST split for the chosen best model
+    try:
+        row = mdf[(mdf["split"] == "test") & (
+            mdf["model"] == best_name)].iloc[0]
+        return {"MAE": float(row["MAE"]), "RMSE": float(row["RMSE"]), "R2": float(row["R2"])}
+    except Exception:
+        return None
+
+
 @st.cache_resource
 def load_model(best_name: str):
     mpath = MODELS / f"{best_name}_yield_next.joblib"
@@ -83,7 +99,16 @@ st.title("🌾 Agri-Fin Yield Predictor — Next Year (t/ha)")
 df = load_data()
 best_name = load_best_model_name()
 pipe = load_model(best_name)
+
+# Sidebar header with model + metrics
 st.sidebar.success(f"Best model: **{best_name}**")
+m = load_best_split_metrics(best_name)
+if m:
+    st.sidebar.caption("**Test metrics**")
+    col_mae, col_rmse, col_r2 = st.sidebar.columns(3)
+    col_mae.metric("MAE", f"{m['MAE']:.3f}")
+    col_rmse.metric("RMSE", f"{m['RMSE']:.3f}")
+    col_r2.metric("R²", f"{m['R2']:.3f}")
 
 # ---- Quick presets (optional) ----
 with st.sidebar.expander("Quick examples"):
@@ -141,7 +166,7 @@ if row.empty:
     st.stop()
 
 # ---------------- prediction ----------------
-# Build feature row with UNIQUE columns (avoid duplicates that break PyArrow)
+# Build feature row with UNIQUE columns (avoid duplicate names)
 # preserves order, removes dups
 feature_cols = list(dict.fromkeys(CAT_FEATURES + NUM_FEATURES))
 X = row[feature_cols].copy()
@@ -155,6 +180,17 @@ except Exception as e:
 st.metric(
     f"Predicted Yield for {area} — {item} in {year+1}", f"{pred:.2f} t/ha")
 
+# Download the current prediction as CSV
+out_row = row[["Area", "Item", "Year"] + NUM_FEATURES].copy()
+out_row["Predicted_Yield_next"] = pred
+csv_bytes = out_row.to_csv(index=False).encode("utf-8")
+st.download_button(
+    "⬇️ Download this prediction (CSV)",
+    data=csv_bytes,
+    file_name=f"prediction_{area}_{item}_{year+1}.csv",
+    mime="text/csv",
+)
+
 # context metrics
 country_avg = float(row["Country_Avg_Yield"].iloc[0])
 crop_avg = float(row["Crop_Avg_Yield"].iloc[0])
@@ -165,7 +201,7 @@ c1.metric("Country Avg Yield", f"{country_avg:.2f} t/ha")
 c2.metric("Crop Avg Yield", f"{crop_avg:.2f} t/ha")
 c3.metric("Current Year Yield", f"{cur_yield:.2f} t/ha")
 
-# ---------------- chart ----------------
+# ---------------- chart: history + predicted point ----------------
 st.subheader("History & Next-Year Prediction")
 hist = sub[["Year", "Yield_t_per_ha"]].copy()
 
@@ -186,6 +222,42 @@ with st.expander("See input features used for prediction"):
     cols_for_table = list(dict.fromkeys(cols_for_table))  # remove duplicates
     st.dataframe(row[cols_for_table].reset_index(
         drop=True), use_container_width=True)
+
+# ---------------- actual vs predicted chart (if preds CSVs exist) ----------------
+pred_files = ["preds_train.csv", "preds_valid.csv", "preds_test.csv"]
+frames = []
+for fn in pred_files:
+    p = MODELS / fn
+    if p.exists():
+        try:
+            frames.append(pd.read_csv(p))
+        except Exception:
+            pass
+
+if frames:
+    comp = pd.concat(frames, ignore_index=True)
+    comp = comp[(comp["Area"] == area) & (comp["Item"] == item)].copy()
+    if not comp.empty:
+        comp["Target_Year"] = comp["Year"] + \
+            1  # we predicted next year's yield
+        comp = comp.sort_values("Target_Year")
+
+        st.subheader("Actual vs Predicted (Next-Year Yield)")
+        fig2, ax2 = plt.subplots(figsize=(8, 3))
+        ax2.plot(comp["Target_Year"], comp["Target_Yield_next"],
+                 marker="o", label="Actual")
+        ax2.plot(comp["Target_Year"], comp["Pred_Yield_next"],
+                 marker="o", linestyle="--", label="Predicted")
+        ax2.set_xlabel("Year")
+        ax2.set_ylabel("Yield (t/ha)")
+        ax2.legend()
+        ax2.set_title(f"{area} — {item}")
+        st.pyplot(fig2)
+    else:
+        st.info(
+            "No saved predictions for this Area/Crop yet. (Run Step 6 locally to generate preds_*.csv)")
+else:
+    st.info("Prediction CSVs not found. (Run Step 6 locally to generate preds_*.csv)")
 
 # ---------------- optional: feature importance image ----------------
 fi_png = ARTIFACTS / "feature_importance_permutation_top20.png"
